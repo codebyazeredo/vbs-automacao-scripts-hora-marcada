@@ -2,6 +2,7 @@ Option Explicit
 
 Const DIAS_RETENCAO_LOGS = 60
 Const INTERVALO_POLL_MS = 2000
+Const LOCK_ORFAO_MINUTOS = 180
 
 Dim FSO
 Dim WshShell
@@ -69,6 +70,7 @@ If Not FSO.FileExists(arquivoConfigPath) Then
 End If
 
 LimparLogsAntigos
+LimparLocksOrfaos
 
 Set estado = CarregarEstado()
 
@@ -113,7 +115,11 @@ Do Until arquivoConfigHandle.AtEndOfStream
                                 If minutosAgora >= minutosAlvo Then
                                     If Not estado.Exists(chaveEstado) Or estado(chaveEstado) <> hojeStr Then
                                         DispararJob nomeBat, caminhoBat, horarioAtual, chaveEstado
+                                    Else
+                                        Log "[" & FormatDateTime(Now, 3) & "] " & nomeBat & " (agendado " & horarioAtual & ") | JA EXECUTADO HOJE"
                                     End If
+                                Else
+                                    Log "[" & FormatDateTime(Now, 3) & "] " & nomeBat & " (agendado " & horarioAtual & ") | AGUARDANDO HORARIO"
                                 End If
                             Else
                                 houveErro = True
@@ -168,9 +174,8 @@ LogError "FIM DOS REGISTROS DE ERRO: " & FormatDateTime(Now, 0)
 LogError "================================================================"
 LogError ""
 
-If Not houveErro Then
-    GravarNoArquivo caminhoLogDiario, logBufferNormal
-Else
+GravarNoArquivo caminhoLogDiario, logBufferNormal
+If houveErro Then
     GravarNoArquivo caminhoLogErroDiario, logBufferErro
 End If
 
@@ -289,6 +294,10 @@ Sub VerificarJobsConcluidos()
                     LogError "  Detalhes: Nenhuma mensagem retornada pelo BAT."
                 End If
                 LogError ""
+
+                Log "[" & FormatDateTime(fimJob, 3) & "] " & job.NomeBat & " (agendado " & job.Horario & ")"
+                Log "  Status: ERRO (Saída: " & codigoSaida & ") | Duração: " & DateDiff("s", job.Inicio, fimJob) & "s | ver erros_" & hojeStr & ".log"
+                Log ""
                 estado(job.ChaveEstado) = hojeStr
             End If
 
@@ -319,6 +328,7 @@ End Sub
 
 Sub GravarNoArquivo(caminho, conteudo)
     Dim arquivo
+    If Trim(conteudo) = "" Then Exit Sub
     Set arquivo = FSO.OpenTextFile(caminho, 8, True)
     arquivo.Write conteudo
     arquivo.Close
@@ -334,6 +344,24 @@ Sub LimparLogsAntigos()
         If LCase(FSO.GetExtensionName(arquivo.Name)) = "log" Then
             If arquivo.DateLastModified < limite Then
                 FSO.DeleteFile arquivo.Path, True
+            End If
+        End If
+    Next
+End Sub
+
+Sub LimparLocksOrfaos()
+    Dim arquivo
+    Dim limite
+    limite = DateAdd("n", -LOCK_ORFAO_MINUTOS, Now)
+
+    For Each arquivo In FSO.GetFolder(pastaLock).Files
+        If LCase(FSO.GetExtensionName(arquivo.Name)) = "lock" Then
+            If arquivo.DateLastModified < limite Then
+                LogError "[" & FormatDateTime(Now, 3) & "] Lock orfao removido (idade > " & LOCK_ORFAO_MINUTOS & " min): " & arquivo.Name
+                LogError ""
+                On Error Resume Next
+                FSO.DeleteFile arquivo.Path, True
+                On Error GoTo 0
             End If
         End If
     Next
